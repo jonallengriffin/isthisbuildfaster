@@ -96,7 +96,7 @@ def find_most_recent_completed_commit():
   '''
   endday = datetime.datetime.today()
   startday = endday - datetime.timedelta(days=7)
-  result = eslib.frequency(include={'tree': 'mozilla-central',
+  result = eslib.frequency(include={'tree': '\"mozilla-central\"',
                                     'date': [startday, endday]},
                                     frequency_fields=['revision']
                           )
@@ -179,11 +179,18 @@ def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
     print 'getting durations from ES for changeset', control_revision
   control = get_durations_for_ES_commit(control_revision)
 
-  trylogs = get_list_of_try_logs('%s-%s' % (submitter, revision2))
+  if tree2 == 'try':
+    trylogs = get_list_of_try_logs('%s-%s' % (submitter, revision2))
 
-  if DEBUG:
-    print "parsing try logs"
-  test = get_durations_from_trylogs(trylogs)
+    if DEBUG:
+      print "parsing try logs"
+    test = get_durations_from_trylogs(trylogs)
+
+  elif tree2 == 'mozilla-central':
+    test = get_durations_for_ES_commit(revision2)
+
+  else:
+    raise Exception("Unsupported tree %s" % tree2)
 
   total_diff = 0
   results = defaultdict(lambda: defaultdict(list))
@@ -202,7 +209,7 @@ def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
            'revisions': [
             { 'tree': 'mozilla-central',
               'revision': control_revision },
-            { 'tree': 'try',
+            { 'tree': tree2,
               'revision': revision2 }
            ]}
 
