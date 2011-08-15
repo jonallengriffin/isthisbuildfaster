@@ -169,11 +169,14 @@ def get_durations_from_trylogs(trylogs):
   return results
 
 def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
-  if DEBUG:
-    print 'finding the most recent changeset with all tests completed'
-  control_revision = find_most_recent_completed_commit()
-  if not control_revision:
-    return None
+  if revision1:
+    control_revision = revision1
+  else:
+    if DEBUG:
+      print 'finding the most recent changeset with all tests completed'
+    control_revision = find_most_recent_completed_commit()
+    if not control_revision:
+      return None
 
   if DEBUG:
     print 'getting durations from ES for changeset', control_revision
@@ -187,6 +190,8 @@ def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
     test = get_durations_from_trylogs(trylogs)
 
   elif tree2 == 'mozilla-central':
+    if not revision2:
+      revision2 = find_most_recent_completed_commit()
     test = get_durations_for_ES_commit(revision2)
 
   else:
