@@ -15,7 +15,7 @@ import urllib2
 from mozautoeslib import ESLib
 from mozautolog import ESAutologTestGroup as AutologTestGroup
 
-DEBUG = True
+DEBUG = False
 
 eslib = ESLib('elasticsearch1.metrics.sjc1.mozilla.com:9200', 'logs', 'testruns')
 tryurl = 'http://stage.mozilla.org/pub/mozilla.org/firefox/try-builds/'
