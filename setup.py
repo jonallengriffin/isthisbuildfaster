@@ -40,7 +40,7 @@ from setuptools import setup, find_packages
 
 version = '0.1'
 
-deps = ['mozautolog >= 0.2.0', 'mozautoeslib >= 0.1.1']
+deps = ['mozautolog >= 0.2.0', 'mozautoeslib >= 0.1.1', 'statlib']
 
 # we only support python 2.6+ right now
 assert sys.version_info[0] == 2

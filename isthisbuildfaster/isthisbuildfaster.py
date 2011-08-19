@@ -1,5 +1,6 @@
 from BeautifulSoup import BeautifulSoup
 from collections import defaultdict
+import copy
 import datetime
 import gzip
 from io import BytesIO
@@ -7,13 +8,14 @@ import json
 import optparse
 import os
 import re
+from statlib import stats
 import sys
 import urllib2
 
 from mozautoeslib import ESLib
 from mozautolog import ESAutologTestGroup as AutologTestGroup
 
-DEBUG = False
+DEBUG = True
 
 eslib = ESLib('elasticsearch1.metrics.sjc1.mozilla.com:9200', 'logs', 'testruns')
 tryurl = 'http://stage.mozilla.org/pub/mozilla.org/firefox/try-builds/'
@@ -90,6 +92,30 @@ def get_links(doc):
        links.append(link.string)
   return links
 
+def get_range_of_recent_commits(newest_commit, count=10):
+  '''Return the 10 most recent commits on mozilla-central, beginning with 
+     the specified one.
+  '''
+  url = 'http://hg.mozilla.org/mozilla-central/json-pushes?full=1&changeset=%s' % newest_commit
+  hg = read_url(url, isJson=True)
+  for id in hg:
+    newest_id = int(id)
+
+  result = []
+  url = 'http://hg.mozilla.org/mozilla-central/json-pushes?full=1&startID=%d&endID=%d' % (newest_id-count, newest_id)
+  hg = read_url(url, isJson=True)
+  for id in hg:
+    result.append(str(hg[id]['changesets'][-1]['node'][0:12]))
+
+  return result
+
+def read_url(url, isJson=False):
+  f = urllib2.urlopen(url)
+  doc = f.read()
+  if isJson:
+    doc = json.loads(doc)
+  return doc
+
 def find_most_recent_completed_commit():
   '''Find the most recent commit which has a full set of test results in
      ES.
@@ -102,6 +128,8 @@ def find_most_recent_completed_commit():
                           )
   commit = { 'revision': None, 'buildid': None }
   for rev in result['revision']['terms']:
+    # Revisions that have completed testing should have at least 140
+    # testruns.
     if rev['count'] > 140:
       result = eslib.query({'tree': 'mozilla-central',
                             'revision': rev['term']},
@@ -128,6 +156,15 @@ def get_durations_for_ES_commit(revision):
       testsuite = 'mochitest-%s' % m.group(1)
     control['%s-%s' % (plat, result['buildtype'])][testsuite] = result['elapsedtime']
   return control
+
+def get_median_duration_for_ES_commit_list(revisions):
+  rlist = []
+
+  for revision in revisions:
+    durations = get_durations_for_ES_commit(revision)
+    rlist.append(durations)
+
+  return rlist
 
 def get_list_of_try_logs(folder):
   logs = []
@@ -160,7 +197,7 @@ def get_durations_from_trylogs(trylogs):
       if DEBUG:
         print 'parsing', os.path.basename(trylog)
       logfile = LogFile(os.path.basename(trylog), os.path.dirname(trylog), os=_os, platform=platform, debug=debug, testgroup=testgroup)
-      if platform != 'android':
+      if platform != 'android' and platform != 'win64':
         logfile.parse()
         for suite in logfile.suites:
           plat = logfile.platform if logfile.platform != "win32" else logfile.os
@@ -169,18 +206,24 @@ def get_durations_from_trylogs(trylogs):
   return results
 
 def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
+  revision_count = 10
+
   if revision1:
     control_revision = revision1
   else:
     if DEBUG:
       print 'finding the most recent changeset with all tests completed'
-    control_revision = find_most_recent_completed_commit()
+    control_revision = get_range_of_recent_commits(find_most_recent_completed_commit(),
+                                                   count=revision_count)
     if not control_revision:
       return None
 
   if DEBUG:
     print 'getting durations from ES for changeset', control_revision
-  control = get_durations_for_ES_commit(control_revision)
+  if isinstance(control_revision, list):
+    control = get_median_duration_for_ES_commit_list(control_revision)
+  else:
+    control = [get_durations_for_ES_commit(control_revision)]
 
   if tree2 == 'try':
     trylogs = get_list_of_try_logs('%s-%s' % (submitter, revision2))
@@ -197,20 +240,30 @@ def compare_test_durations(tree1, revision1, tree2, revision2, submitter):
   else:
     raise Exception("Unsupported tree %s" % tree2)
 
-  total_diff = 0
   results = defaultdict(lambda: defaultdict(list))
-  for plat in control:
-    after = test.get(plat, {})
-    before = control.get(plat, {})
-    for suite in before:
-      before_duration = int(before.get(suite))
-      after_duration = int(after.get(suite, -1))
-      difference = after_duration - before_duration if after_duration > -1 else 0
-      total_diff += difference
-      results[plat][suite] = [before_duration, after_duration, difference]
+  totals = [0 for x in range(0, len(control))]
+  test_total = 0
+
+  for plat in test:
+    test_suites = test.get(plat, {})
+
+    for suite in test_suites:
+      testtime = int(test[plat][suite])
+      timelist = [int(x.get(plat, {}).get(suite)) for x in control if x.get(plat, {}).get(suite)]
+      results[plat][suite] = {'mean': stats.mean(timelist),
+                              'stdev': stats.stdev(timelist) if len(timelist) > 1 else 0,
+                              'testtime': testtime
+                             }
+      totallist = [int(x.get(plat, {}).get(suite)) if x.get(plat, {}).get(suite) else testtime for x in control]
+      totals = [y + totals[x] for x,y in enumerate(totallist)]
+      test_total += testtime
 
   return { 'durations': results,
-           'difference': total_diff,
+           'totals': {
+             'mean': stats.mean(totals),
+             'stdev': stats.stdev(totals) if len(totals) > 1 else 0,
+             'testtime': test_total
+           },
            'revisions': [
             { 'tree': 'mozilla-central',
               'revision': control_revision },
